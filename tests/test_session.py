@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import TYPE_CHECKING
-from unittest.mock import ANY, AsyncMock, call
+from unittest.mock import ANY, AsyncMock, call, patch
 
 import pytest
 from homeconnect_websocket import (
@@ -13,6 +13,7 @@ from homeconnect_websocket import (
     HCSession,
     HCSessionReconnect,
 )
+from homeconnect_websocket.const import MAX_CONNECT_TIMEOUT
 from homeconnect_websocket.message import Action, Message
 from homeconnect_websocket.testutils import TEST_APP_ID, TEST_APP_NAME
 
@@ -645,3 +646,123 @@ async def test_session_reconnect_auto_handshake(
             call(ConnectionState.CLOSED),
         ]
     )
+
+
+@pytest.mark.asyncio
+async def test_reconnect_loop_backoff_on_failure() -> None:
+    """The reconnect loop waits with growing backoff between failed attempts."""
+    session = HCSessionReconnect(
+        "127.0.0.1",
+        app_name=TEST_APP_NAME,
+        app_id=TEST_APP_ID,
+        psk64=None,
+        handshake=False,
+    )
+    session._socket.connect = AsyncMock(
+        side_effect=[ConnectionFailedError, ConnectionFailedError, None]
+    )
+    session._wrap_recv_loop = AsyncMock()
+
+    with patch(
+        "homeconnect_websocket.session.asyncio.sleep", new=AsyncMock()
+    ) as sleep_mock:
+        await session._reconnect_loop()
+
+    sleep_mock.assert_has_awaits([call(1.0), call(1.2)])
+    assert session._retry_count == 0
+
+
+@pytest.mark.asyncio
+async def test_reconnect_loop_resets_retry_count_after_handshake_success() -> None:
+    """A successful reconnect through the handshake path resets the backoff."""
+    session = HCSessionReconnect(
+        "127.0.0.1",
+        app_name=TEST_APP_NAME,
+        app_id=TEST_APP_ID,
+        psk64=None,
+        handshake=True,
+    )
+    session._retry_count = 3
+    session._socket.connect = AsyncMock(return_value=None)
+    session._pre_handshake = AsyncMock(return_value=Message())
+    session._handshake = AsyncMock()
+    session._wrap_recv_loop = AsyncMock()
+
+    await session._reconnect_loop()
+
+    assert session._retry_count == 0
+
+
+@pytest.mark.asyncio
+async def test_reconnect_loop_backoff_capped_at_max() -> None:
+    """The backoff never exceeds MAX_CONNECT_TIMEOUT, however high the retry count."""
+    session = HCSessionReconnect(
+        "127.0.0.1",
+        app_name=TEST_APP_NAME,
+        app_id=TEST_APP_ID,
+        psk64=None,
+        handshake=False,
+    )
+    session._retry_count = 30
+    session._socket.connect = AsyncMock(side_effect=[ConnectionFailedError, None])
+    session._wrap_recv_loop = AsyncMock()
+
+    with patch(
+        "homeconnect_websocket.session.asyncio.sleep", new=AsyncMock()
+    ) as sleep_mock:
+        await session._reconnect_loop()
+
+    sleep_mock.assert_awaited_once_with(MAX_CONNECT_TIMEOUT)
+
+
+@pytest.mark.asyncio
+async def test_close_during_backoff_cancels_reconnect_task() -> None:
+    """close() during a backoff sleep must not leave the reconnect task running."""
+    session = HCSessionReconnect(
+        "127.0.0.1",
+        app_name=TEST_APP_NAME,
+        app_id=TEST_APP_ID,
+        psk64=None,
+        handshake=False,
+    )
+    session._socket.connect = AsyncMock(side_effect=ConnectionFailedError)
+
+    session._reconnect_task = session._task_manager.create_background_task(
+        session._reconnect_loop()
+    )
+    await asyncio.sleep(0)  # let the loop reach the backoff sleep
+
+    await session.close()
+    await asyncio.sleep(0)
+
+    assert session._reconnect_task.done()
+    assert not session.connected
+
+
+@pytest.mark.asyncio
+async def test_connect_after_aborted_retry_starts_backoff_fresh() -> None:
+    """A fresh connect() after an aborted retry must not inherit the old retry count."""
+    session = HCSessionReconnect(
+        "127.0.0.1",
+        app_name=TEST_APP_NAME,
+        app_id=TEST_APP_ID,
+        psk64=None,
+        handshake=False,
+    )
+    session._retry_count = 5
+
+    session._socket.connect = AsyncMock(return_value=None)
+    session._wrap_recv_loop = AsyncMock()
+
+    await session.connect()
+    assert session._retry_count == 0
+
+    session._socket.connect = AsyncMock(
+        side_effect=[ConnectionFailedError, ConnectionFailedError, None]
+    )
+    with patch(
+        "homeconnect_websocket.session.asyncio.sleep", new=AsyncMock()
+    ) as sleep_mock:
+        await session._reconnect_loop()
+
+    sleep_mock.assert_has_awaits([call(1.0), call(1.2)])
