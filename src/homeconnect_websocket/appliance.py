@@ -246,22 +246,31 @@ class HomeAppliance:
     @property
     def active_program(self) -> Program | None:
         """Return the current Active Program entity or None if no Program is active."""
-        return (
-            None
-            if self._active_program.value_shadow == 0
-            or self._active_program.value_shadow is None
-            else self.entities_uid[self._active_program.value]
-        )
+        if self._active_program.value_shadow in (0, None):
+            return None
+        uid = self._active_program.value
+        if uid not in self.entities_uid:
+            # Appliance reports a program UID our DeviceDescription doesn't
+            # know, typically a stale/outdated profile - stay usable instead
+            # of crashing the whole update.
+            self._logger.debug(
+                "Active program UID %s not found in device description", uid
+            )
+            return None
+        return self.entities_uid[uid]
 
     @property
     def selected_program(self) -> Program | None:
         """Return current selected Program entity or None if no Program is selected."""
-        return (
-            None
-            if self._selected_program.value_shadow == 0
-            or self._selected_program.value_shadow is None
-            else self.entities_uid[self._selected_program.value]
-        )
+        if self._selected_program.value_shadow in (0, None):
+            return None
+        uid = self._selected_program.value
+        if uid not in self.entities_uid:
+            self._logger.debug(
+                "Selected program UID %s not found in device description", uid
+            )
+            return None
+        return self.entities_uid[uid]
 
     async def _init(self) -> None:
         try:
