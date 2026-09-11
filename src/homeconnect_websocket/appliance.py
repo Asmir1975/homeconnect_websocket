@@ -246,7 +246,10 @@ class HomeAppliance:
     @property
     def active_program(self) -> Program | None:
         """Return the current Active Program entity or None if no Program is active."""
-        if self._active_program.value_shadow in (0, None):
+        if self._active_program is None or self._active_program.value_shadow in (
+            0,
+            None,
+        ):
             return None
         uid = self._active_program.value
         if uid not in self.entities_uid:
@@ -262,7 +265,10 @@ class HomeAppliance:
     @property
     def selected_program(self) -> Program | None:
         """Return current selected Program entity or None if no Program is selected."""
-        if self._selected_program.value_shadow in (0, None):
+        if self._selected_program is None or self._selected_program.value_shadow in (
+            0,
+            None,
+        ):
             return None
         uid = self._selected_program.value
         if uid not in self.entities_uid:

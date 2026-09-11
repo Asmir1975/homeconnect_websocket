@@ -65,3 +65,34 @@ async def test_selected_program_known_uid(
     await appliance.entities["Test.SelectedProgram"].update({"value": 500})
 
     assert appliance.selected_program is appliance.entities_uid[500]
+
+
+NO_PROGRAM_ROOT_DESCRIPTION = DeviceDescription(
+    program=[
+        EntityDescription(uid=500, name="Test.Program1"),
+    ],
+)
+
+
+@pytest.mark.asyncio
+async def test_active_program_without_root_returns_none(
+    mock_homeconnect_appliance: MockApplianceType,
+) -> None:
+    """Test active_program returns None when the appliance has no root entity."""
+    appliance = await mock_homeconnect_appliance(
+        description=NO_PROGRAM_ROOT_DESCRIPTION
+    )
+
+    assert appliance.active_program is None
+
+
+@pytest.mark.asyncio
+async def test_selected_program_without_root_returns_none(
+    mock_homeconnect_appliance: MockApplianceType,
+) -> None:
+    """Test selected_program returns None when the appliance has no root entity."""
+    appliance = await mock_homeconnect_appliance(
+        description=NO_PROGRAM_ROOT_DESCRIPTION
+    )
+
+    assert appliance.selected_program is None
