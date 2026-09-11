@@ -498,6 +498,25 @@ async def test_session_connection_closed(
 
 
 @pytest.mark.asyncio
+async def test_close_after_abnormal_closure_still_closes_socket() -> None:
+    """close() must close the socket even without the CLOSING/CLOSED transition."""
+    session = HCSession(
+        "127.0.0.1",
+        app_name=TEST_APP_NAME,
+        app_id=TEST_APP_ID,
+        psk64=None,
+        handshake=False,
+    )
+    session.connection_state = ConnectionState.ABNORMAL_CLOSURE
+    session._socket.close = AsyncMock()
+
+    await session.close()
+
+    session._socket.close.assert_awaited_once()
+    assert session.connection_state == ConnectionState.ABNORMAL_CLOSURE
+
+
+@pytest.mark.asyncio
 async def test_session_reconnect_manual(
     appliance_server: Callable[..., Awaitable[ApplianceServer]],
 ) -> None:

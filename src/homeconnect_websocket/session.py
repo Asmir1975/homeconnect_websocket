@@ -294,6 +294,11 @@ class HCSession(HCSessionBase):
             await self._socket.close()
             await self._task_manager.block_till_done()  # Wait for all pending callbacks
             self._set_connection_state(ConnectionState.CLOSED)
+        elif self.connection_state == ConnectionState.ABNORMAL_CLOSURE:
+            # The connection ended abnormally without going through the CLOSING
+            # path above, so the socket (and any owned aiohttp session) was
+            # never told to close. HCSocket.close() is idempotent-safe here.
+            await self._socket.close()
 
         await self._task_manager.block_till_done()  # Wait for connection state callback
 
