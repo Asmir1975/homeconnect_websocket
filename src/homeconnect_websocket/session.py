@@ -168,7 +168,7 @@ class HCSessionBase:
             try:
                 message_obj = load_message(message)
                 await self._message_handler(message_obj)
-            except (JSONDecodeError, KeyError):
+            except JSONDecodeError, KeyError:
                 self._logger.warning("Can't decode message: %s", message)
 
 
@@ -292,6 +292,10 @@ class HCSession(HCSessionBase):
         ):
             self._set_connection_state(ConnectionState.CLOSING)
             await self._socket.close()
+            # Wake up any send_sync() still waiting on a response so it fails
+            # with DisconnectedError immediately instead of blocking until its
+            # own send timeout elapses.
+            await self._reset()
             await self._task_manager.block_till_done()  # Wait for all pending callbacks
             self._set_connection_state(ConnectionState.CLOSED)
         elif self.connection_state == ConnectionState.ABNORMAL_CLOSURE:
@@ -299,6 +303,7 @@ class HCSession(HCSessionBase):
             # path above, so the socket (and any owned aiohttp session) was
             # never told to close. HCSocket.close() is idempotent-safe here.
             await self._socket.close()
+            await self._reset()
 
         await self._task_manager.block_till_done()  # Wait for connection state callback
 
@@ -556,7 +561,7 @@ class HCSessionReconnect(HCSession):
                 self._retry_count = 0
                 break
 
-            except (ConnectionFailedError, aiohttp.ClientError):
+            except ConnectionFailedError, aiohttp.ClientError:
                 self._logger.debug("Reconnect failed")
                 timeout = min(
                     TIMEOUT_INCREASE_FACTOR**self._retry_count, MAX_CONNECT_TIMEOUT
