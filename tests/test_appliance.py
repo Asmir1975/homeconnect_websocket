@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 
 import pytest
 from homeconnect_websocket.entities import DeviceDescription, EntityDescription
+from homeconnect_websocket.errors import DisconnectedError
+from homeconnect_websocket.session import ConnectionState
 
 if TYPE_CHECKING:
     from homeconnect_websocket.testutils import MockApplianceType
@@ -96,3 +99,62 @@ async def test_selected_program_without_root_returns_none(
     )
 
     assert appliance.selected_program is None
+
+
+@pytest.mark.asyncio
+async def test_init_disconnected_during_send_sync_is_not_logged_as_error(
+    mock_homeconnect_appliance: MockApplianceType,
+) -> None:
+    """An expected disconnect while _init() is waiting must not log an error."""
+    appliance = await mock_homeconnect_appliance(description=DESCRIPTION)
+    appliance.session.send_sync.side_effect = DisconnectedError
+
+    await appliance._init()
+
+    appliance._logger.exception.assert_not_called()
+    appliance._logger.debug.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_init_real_timeout_is_still_logged_as_error(
+    mock_homeconnect_appliance: MockApplianceType,
+) -> None:
+    """A genuine init failure on a still-connected session stays visible."""
+    appliance = await mock_homeconnect_appliance(description=DESCRIPTION)
+    appliance.session.send_sync.side_effect = TimeoutError
+
+    await appliance._init()
+
+    appliance._logger.exception.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_connection_callback_skips_stale_connected_after_aborted_init(
+    mock_homeconnect_appliance: MockApplianceType,
+) -> None:
+    """A CONNECTED event must not reach the callback if close() won the race."""
+    appliance = await mock_homeconnect_appliance(description=DESCRIPTION)
+    appliance.session.send_sync.side_effect = DisconnectedError
+    appliance.session.connected = False
+    ext_callback = AsyncMock()
+    appliance._ext_connection_state_callback = ext_callback
+
+    await appliance._connection_callback(ConnectionState.CONNECTED)
+
+    ext_callback.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_connection_callback_forwards_connected_when_session_still_connected(
+    mock_homeconnect_appliance: MockApplianceType,
+) -> None:
+    """A successful init still forwards CONNECTED to the external callback."""
+    appliance = await mock_homeconnect_appliance(description=DESCRIPTION)
+    appliance.session.send_sync.return_value.data = []
+    appliance.session.connected = True
+    ext_callback = AsyncMock()
+    appliance._ext_connection_state_callback = ext_callback
+
+    await appliance._connection_callback(ConnectionState.CONNECTED)
+
+    ext_callback.assert_called_once_with(ConnectionState.CONNECTED)
