@@ -18,6 +18,7 @@ from .entities import (
     Setting,
     Status,
 )
+from .errors import DisconnectedError
 from .message import Action, Message
 from .session import ConnectionState, HCSession, HCSessionReconnect
 from .task_manager import TaskManager
@@ -292,12 +293,19 @@ class HomeAppliance:
                     Message(resource="/ro/allMandatoryValues")
                 )
                 await self._update_entities(mandatory_values.data)
+        except DisconnectedError:
+            self._logger.debug("Appliance init aborted, session disconnected")
         except Exception:
             self._logger.exception("Exception during Appliance init")
 
     async def _connection_callback(self, new_state: ConnectionState) -> None:
         if new_state == ConnectionState.CONNECTED:
             await self._init()
+            if not self.session.connected:
+                # The session was closed while _init() was still waiting on a
+                # response; this CONNECTED event is stale and must not reach
+                # the external callback.
+                return
         if self._ext_connection_state_callback:
             try:
                 await self._ext_connection_state_callback(new_state)

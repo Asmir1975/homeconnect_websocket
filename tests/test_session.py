@@ -10,6 +10,7 @@ from homeconnect_websocket import (
     AuthenticationError,
     ConnectionFailedError,
     ConnectionState,
+    DisconnectedError,
     HCSession,
     HCSessionReconnect,
 )
@@ -495,6 +496,42 @@ async def test_session_connection_closed(
     )
 
     await session.close()
+
+
+@pytest.mark.asyncio
+async def test_close_resolves_pending_send_sync_with_disconnected_error(
+    appliance_server: Callable[..., Awaitable[ApplianceServer]],
+) -> None:
+    """close() must fail a pending send_sync() immediately, not after its timeout."""
+    appliance = await appliance_server(DEVICE_MESSAGE_SET_3)
+
+    session = HCSession(
+        appliance.host,
+        app_name=TEST_APP_NAME,
+        app_id=TEST_APP_ID,
+        psk64=None,
+    )
+    await session.connect()
+    assert session.connected
+
+    # Swallow the server's reply so the request is left waiting, like a
+    # response that never arrives because the connection dies in transit.
+    appliance._send = AsyncMock()
+
+    pending = asyncio.ensure_future(
+        session.send_sync(Message(resource="/ro/noResponse"), timeout=5)
+    )
+    await asyncio.sleep(0.1)  # let the request register its response queue
+
+    loop = asyncio.get_event_loop()
+    start = loop.time()
+    await session.close()
+    elapsed = loop.time() - start
+
+    assert elapsed < 1  # close() must not block on the 5s send timeout
+
+    with pytest.raises(DisconnectedError):
+        await pending
 
 
 @pytest.mark.asyncio
