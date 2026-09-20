@@ -9,3 +9,7 @@ updates:
         patterns:
           - "ruff"
           - "prek"
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "daily"
