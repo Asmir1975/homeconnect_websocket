@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from .callback_manager import CallbackManager
 from .entities import (
+    Access,
     ActiveProgram,
     Command,
     DeviceDescription,
@@ -27,6 +28,9 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from aiohttp import ClientSession
+
+# Option attributes an appliance may report per program in a description change.
+_OPTION_STATE_KEYS = ("available", "access", "min", "max", "stepSize")
 
 
 class HomeAppliance:
@@ -159,24 +163,110 @@ class HomeAppliance:
             if message.resource in ("/ro/descriptionChange", "/ro/values"):
                 await self._update_entities(message.data)
         elif message.action == Action.RESPONSE:
-            if message.resource in (
-                "/ro/allDescriptionChanges",
-                "/ro/allMandatoryValues",
-            ):
+            if message.resource == "/ro/allDescriptionChanges":
+                await self._update_entities(message.data, snapshot=True)
+            elif message.resource == "/ro/allMandatoryValues":
                 await self._update_entities(message.data)
             elif message.resource in ("/iz/info", "/ci/info"):
                 # Update device Info
                 self.info.update(message.data[0])
 
-    async def _update_entities(self, data: list[dict]) -> None:
-        """Update entities from Message data."""
+    async def _update_entities(
+        self, data: list[dict], *, snapshot: bool = False
+    ) -> None:
+        """
+        Update entities from Message data.
+
+        With snapshot, data is the complete list of description changes, so
+        program specific Option states not listed anymore are dropped.
+        """
         async with self.callback_manager:
+            recompute = snapshot
+            if snapshot:
+                self._option_overlays.clear()
             for entity in data:
                 uid = int(entity["uid"])
-                if uid in self.entities_uid:
-                    await self.entities_uid[uid].update(entity)
-                else:
+                if uid not in self.entities_uid:
                     self._logger.debug("Recived Update for unkown entity %s", uid)
+                    continue
+                target = self.entities_uid[uid]
+                if isinstance(target, Option):
+                    state = self._normalize_option_state(entity)
+                    if entity.get("parentUID") in self._favorite_uids:
+                        if "value" in entity:
+                            await target.update({"value": entity["value"]})
+                        continue
+                    if entity.get("parentUID") in self._program_uids:
+                        if state:
+                            self._option_overlays.setdefault(
+                                entity["parentUID"], {}
+                            ).setdefault(uid, {}).update(state)
+                            recompute = True
+                        if "value" in entity:
+                            await target.update({"value": entity["value"]})
+                        continue
+                    if state:
+                        self._option_base[uid].update(state)
+                        recompute = True
+                await target.update(entity)
+
+            context = self._current_program_uid()
+            if recompute or context != self._option_context:
+                self._option_context = context
+                await self._apply_option_context()
+
+    def _current_program_uid(self) -> int | None:
+        """UID of the active program, else of the selected program, else None."""
+        for root in (self._active_program, self._selected_program):
+            if root is not None and root.value not in (0, None):
+                return int(root.value)
+        return None
+
+    @staticmethod
+    def _normalize_option_state(values: dict) -> dict:
+        """Option state from a description (change), typed like on the Option."""
+        state = {}
+        for key in _OPTION_STATE_KEYS:
+            if key not in values:
+                continue
+            value = values[key]
+            if value is None:
+                state[key] = None
+            elif key == "available":
+                state[key] = bool(value)
+            elif key == "access":
+                state[key] = Access(str(value).lower())
+            else:
+                state[key] = float(value)
+        return state
+
+    @staticmethod
+    def _option_state(option: Option) -> dict:
+        return HomeAppliance._normalize_option_state(
+            {
+                "available": option.available,
+                "access": option.access,
+                "min": option.min,
+                "max": option.max,
+                "stepSize": option.step,
+            }
+        )
+
+    async def _apply_option_context(self) -> None:
+        """Apply each Option's own state plus the states of the current program."""
+        overlay = self._option_overlays.get(self._option_context, {})
+        for uid, base in self._option_base.items():
+            option = self.entities_uid[uid]
+            effective = {**base, **overlay.get(uid, {})}
+            current = self._option_state(option)
+            if effective == current:
+                continue
+            option._available = effective["available"]  # noqa: SLF001
+            option._access = effective["access"]  # noqa: SLF001
+            option._min = effective["min"]  # noqa: SLF001
+            option._max = effective["max"]  # noqa: SLF001
+            option._step = effective["stepSize"]  # noqa: SLF001
+            await option.update({})
 
     def _create_entities(self, description: DeviceDescription) -> None:
         """Create Entities from Device description."""
@@ -213,6 +303,23 @@ class HomeAppliance:
                 description["selectedProgram"], SelectedProgram
             )
             self._selected_program = entity
+
+        # An appliance describes an Option also inside a single program: a
+        # description change whose parentUID is a program (e.g. a favorite)
+        # only applies while that program is selected or active. Keep those
+        # per program, apart from the Option's own state.
+        self._program_uids = {program.uid for program in self.programs.values()}
+        # Favorites never restrict Options.
+        self._favorite_uids = {
+            program.uid
+            for program in self.programs.values()
+            if program.name.startswith("BSH.Common.Program.Favorite.")
+        }
+        self._option_base = {
+            option.uid: self._option_state(option) for option in self.options.values()
+        }
+        self._option_overlays: dict[int, dict[int, dict]] = {}
+        self._option_context: int | None = None
 
     def _create_entity(
         self, description: EntityDescription, cls: type[Entity]
@@ -286,7 +393,7 @@ class HomeAppliance:
                 description_changes = await self.session.send_sync(
                     Message(resource="/ro/allDescriptionChanges")
                 )
-                await self._update_entities(description_changes.data)
+                await self._update_entities(description_changes.data, snapshot=True)
 
                 # request mandatory values
                 mandatory_values = await self.session.send_sync(
