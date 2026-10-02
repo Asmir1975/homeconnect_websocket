@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
 import pytest
-from aiohttp import WSMessage, WSMsgType
+from aiohttp import ServerTimeoutError, WSMessage, WSMsgType
 from Crypto.Random import get_random_bytes
 from homeconnect_websocket import AuthenticationError
 from homeconnect_websocket.hc_socket import AesSocket, TlsSocket
@@ -143,6 +143,19 @@ async def test_ase_wrong_msg_type() -> None:
 
     msg = WSMessage(type=WSMsgType.PING, data=None, extra=None)
     with pytest.raises(ValueError, match="Message not of Type binary"):
+        await socket._receive(msg)
+
+
+@pytest.mark.asyncio
+async def test_ase_ws_error_raises_original_exception() -> None:
+    """Test AES Socket re-raises the exception of a WS ERROR message like TLS."""
+    psk64 = urlsafe_b64encode(get_random_bytes(32)).decode()
+    iv64 = urlsafe_b64encode(get_random_bytes(16)).decode()
+    socket = AesSocket("localhost", psk64=psk64, iv64=iv64)
+
+    error = ServerTimeoutError("No PONG received after 10.0 seconds")
+    msg = WSMessage(type=WSMsgType.ERROR, data=error, extra=None)
+    with pytest.raises(ServerTimeoutError, match="No PONG"):
         await socket._receive(msg)
 
 
