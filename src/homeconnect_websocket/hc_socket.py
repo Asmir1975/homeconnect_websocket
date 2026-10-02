@@ -243,6 +243,8 @@ class AesSocket(HCSocket):
         await self._websocket.send_bytes(enc_msg + self._last_tx_hmac)
 
     async def _receive(self, message: aiohttp.WSMessage) -> str:
+        if message.type == aiohttp.WSMsgType.ERROR:
+            raise message.data
         if message.type != aiohttp.WSMsgType.BINARY:
             msg = f"Message not of Type binary {message!s}"
             self._logger.warning(msg)

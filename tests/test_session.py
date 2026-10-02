@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from base64 import urlsafe_b64encode
 from typing import TYPE_CHECKING
-from unittest.mock import ANY, AsyncMock, call, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 
 import pytest
+from aiohttp import ServerTimeoutError, WSMessage, WSMsgType
+from Crypto.Random import get_random_bytes
 from homeconnect_websocket import (
     AllreadyConnectedError,
     AuthenticationError,
@@ -746,6 +749,55 @@ async def test_reconnect_loop_resets_retry_count_after_handshake_success() -> No
 
     await session._reconnect_loop()
 
+    assert session._retry_count == 0
+
+
+@pytest.mark.asyncio
+async def test_reconnect_loop_retries_aes_timeout_before_init_message() -> None:
+    """A PONG timeout while waiting for the init message is retried on AES too."""
+    session = HCSessionReconnect(
+        "127.0.0.1",
+        app_name=TEST_APP_NAME,
+        app_id=TEST_APP_ID,
+        psk64=urlsafe_b64encode(get_random_bytes(32)).decode(),
+        iv64=urlsafe_b64encode(get_random_bytes(16)).decode(),
+        handshake=True,
+    )
+    session._socket.connect = AsyncMock(return_value=None)
+    session._socket._websocket = MagicMock()
+    session._socket._websocket.receive = AsyncMock(
+        return_value=WSMessage(
+            type=WSMsgType.ERROR,
+            data=ServerTimeoutError("No PONG received after 10.0 seconds"),
+            extra=None,
+        )
+    )
+    real_pre_handshake = session._pre_handshake
+    pre_handshake_calls = 0
+
+    async def pre_handshake() -> Message:
+        # The first attempt reads the timeout frame through the real AES socket,
+        # the second one gets a valid init message.
+        nonlocal pre_handshake_calls
+        pre_handshake_calls += 1
+        if pre_handshake_calls == 1:
+            return await real_pre_handshake()
+        return Message()
+
+    session._pre_handshake = pre_handshake
+    session._handshake = AsyncMock()
+    session._wrap_recv_loop = AsyncMock()
+    session.close = AsyncMock()
+
+    with patch(
+        "homeconnect_websocket.session.asyncio.sleep", new=AsyncMock()
+    ) as sleep_mock:
+        await session._reconnect_loop()
+
+    assert pre_handshake_calls == 2
+    sleep_mock.assert_awaited_once_with(1.0)
+    session._handshake.assert_awaited_once()
+    session.close.assert_not_awaited()
     assert session._retry_count == 0
 
 
