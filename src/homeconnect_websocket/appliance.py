@@ -386,19 +386,27 @@ class HomeAppliance:
             return None
         return self.entities_uid[uid]
 
+    async def _init_request(self, resource: str) -> Message:
+        """Send an init request, retry once after a timeout."""
+        try:
+            return await self.session.send_sync(Message(resource=resource))
+        except TimeoutError:
+            if not self.session.connected:
+                raise
+            self._logger.debug("Retrying %s after timeout", resource)
+            return await self.session.send_sync(Message(resource=resource))
+
     async def _init(self) -> None:
         try:
             async with self.callback_manager:
                 # request description changes
-                description_changes = await self.session.send_sync(
-                    Message(resource="/ro/allDescriptionChanges")
+                description_changes = await self._init_request(
+                    "/ro/allDescriptionChanges"
                 )
                 await self._update_entities(description_changes.data, snapshot=True)
 
                 # request mandatory values
-                mandatory_values = await self.session.send_sync(
-                    Message(resource="/ro/allMandatoryValues")
-                )
+                mandatory_values = await self._init_request("/ro/allMandatoryValues")
                 await self._update_entities(mandatory_values.data)
         except DisconnectedError:
             self._logger.debug("Appliance init aborted, session disconnected")

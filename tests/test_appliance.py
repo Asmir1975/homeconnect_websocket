@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
@@ -126,6 +127,24 @@ async def test_init_real_timeout_is_still_logged_as_error(
     await appliance._init()
 
     appliance._logger.exception.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_init_retries_once_after_timeout(
+    mock_homeconnect_appliance: MockApplianceType,
+) -> None:
+    """A timed out init request is sent once more on a still-connected session."""
+    appliance = await mock_homeconnect_appliance(description=DESCRIPTION)
+    appliance.session.send_sync.side_effect = [
+        TimeoutError,
+        SimpleNamespace(data=[]),
+        SimpleNamespace(data=[]),
+    ]
+
+    await appliance._init()
+
+    assert appliance.session.send_sync.await_count == 3
+    appliance._logger.exception.assert_not_called()
 
 
 @pytest.mark.asyncio
