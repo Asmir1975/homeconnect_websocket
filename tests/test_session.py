@@ -732,6 +732,30 @@ async def test_reconnect_loop_backoff_on_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reconnect_loop_retries_timeout_error() -> None:
+    """A plain TimeoutError while connecting is retried like other connect failures."""
+    session = HCSessionReconnect(
+        "127.0.0.1",
+        app_name=TEST_APP_NAME,
+        app_id=TEST_APP_ID,
+        psk64=None,
+        handshake=False,
+    )
+    session._socket.connect = AsyncMock(side_effect=[TimeoutError, TimeoutError, None])
+    session._wrap_recv_loop = AsyncMock()
+    session.close = AsyncMock()
+
+    with patch(
+        "homeconnect_websocket.session.asyncio.sleep", new=AsyncMock()
+    ) as sleep_mock:
+        await session._reconnect_loop()
+
+    sleep_mock.assert_has_awaits([call(1.0), call(1.2)])
+    session.close.assert_not_awaited()
+    assert session._retry_count == 0
+
+
+@pytest.mark.asyncio
 async def test_reconnect_loop_resets_retry_count_after_handshake_success() -> None:
     """A successful reconnect through the handshake path resets the backoff."""
     session = HCSessionReconnect(

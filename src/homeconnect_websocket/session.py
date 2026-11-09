@@ -561,7 +561,7 @@ class HCSessionReconnect(HCSession):
                 self._retry_count = 0
                 break
 
-            except ConnectionFailedError, aiohttp.ClientError:
+            except ConnectionFailedError, aiohttp.ClientError, TimeoutError:
                 self._logger.debug("Reconnect failed")
                 timeout = min(
                     TIMEOUT_INCREASE_FACTOR**self._retry_count, MAX_CONNECT_TIMEOUT
