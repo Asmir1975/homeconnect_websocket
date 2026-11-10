@@ -178,6 +178,7 @@ class HCSession(HCSessionBase):
     service_versions: dict
     _sid: int | None = None
     _last_msg_id: int | None = None
+    _handshake_counter: int = 0
     _device_info: dict
     _response_queues: dict[int, asyncio.Queue]
     _send_lock: asyncio.Lock
@@ -405,6 +406,8 @@ class HCSession(HCSessionBase):
             raise HCHandshakeError(msg) from exc
 
     async def _handshake(self, message_init: Message) -> None:
+        self._handshake_counter += 1
+        handshake_id = self._handshake_counter
         self._set_connection_state(ConnectionState.HANDSHAKE)
         try:
             # responde to init message
@@ -478,7 +481,12 @@ class HCSession(HCSessionBase):
             raise HCHandshakeError(msg) from exc
         except Exception as exc:
             msg = "Unknown Exception during Handshake"
-            self._logger.exception(msg)
+            if handshake_id == self._handshake_counter:
+                self._logger.exception(msg)
+            else:
+                self._logger.warning(
+                    "Handshake abandoned, a newer connection attempt took over"
+                )
             raise HCHandshakeError(msg) from exc
 
     def _set_service_versions(self, message: Message) -> None:
@@ -538,6 +546,11 @@ class HCSessionReconnect(HCSession):
         if self._reconnect_task is not None and not self._reconnect_task.done():
             self._reconnect_task.cancel()
         await super().close()
+
+    async def _reconnect_after(self, delay: float) -> None:
+        if delay:
+            await asyncio.sleep(delay)
+        await self._reconnect_loop()
 
     async def _reconnect_loop(self) -> None:
         while self._reconnect:
@@ -604,9 +617,17 @@ class HCSessionReconnect(HCSession):
                     exc_info=self._socket._websocket.exception(),  # noqa: SLF001
                 )
                 if self._reconnect:
+                    delay = 0.0
+                    if self.connection_state == ConnectionState.HANDSHAKE:
+                        # Closed during the handshake: wait before the next attempt
+                        delay = min(
+                            TIMEOUT_INCREASE_FACTOR**self._retry_count,
+                            MAX_CONNECT_TIMEOUT,
+                        )
+                        self._retry_count += 1
                     self._set_connection_state(ConnectionState.RECONNECTING)
                     self._reconnect_task = self._task_manager.create_background_task(
-                        self._reconnect_loop()
+                        self._reconnect_after(delay)
                     )
                 else:
                     self._set_connection_state(ConnectionState.ABNORMAL_CLOSURE)

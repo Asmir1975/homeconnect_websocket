@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from base64 import urlsafe_b64encode
 from typing import TYPE_CHECKING
 from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
@@ -14,10 +15,11 @@ from homeconnect_websocket import (
     ConnectionFailedError,
     ConnectionState,
     DisconnectedError,
+    HCHandshakeError,
     HCSession,
     HCSessionReconnect,
 )
-from homeconnect_websocket.const import MAX_CONNECT_TIMEOUT
+from homeconnect_websocket.const import MAX_CONNECT_TIMEOUT, TIMEOUT_INCREASE_FACTOR
 from homeconnect_websocket.message import Action, Message
 from homeconnect_websocket.testutils import TEST_APP_ID, TEST_APP_NAME
 
@@ -901,15 +903,24 @@ async def test_connect_after_aborted_retry_starts_backoff_fresh() -> None:
 
 
 @pytest.mark.asyncio
-async def test_superseded_handshake_does_not_close_session(
+async def test_superseded_handshake_backs_off_and_stays_connected(
     appliance_server: Callable[..., Awaitable[ApplianceServer]],
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A superseded handshake must not mark a working reconnect as closing."""
+    """Closes during the handshake back off and a superseded handshake is harmless."""
     # The appliance closes the first two reconnect connections right after the
     # service request (code 1008). Every close starts a new reconnect loop while
     # the previous loop still waits in its handshake. After the third connection
-    # succeeded, the two stale handshakes time out and must leave the state alone.
+    # succeeded, the two stale handshakes time out. They must wait between the
+    # attempts, log a warning instead of an error and leave the state alone.
+    real_sleep = asyncio.sleep
+    waits: list[float] = []
+
+    async def fast_sleep(seconds: float) -> None:
+        waits.append(seconds)
+        await real_sleep(0.01)
+
     monkeypatch.setattr(HCSessionReconnect.send_sync, "__defaults__", (0.5,))
     appliance = await appliance_server(DEVICE_MESSAGE_SET_1)
     connection_callback = AsyncMock()
@@ -939,10 +950,13 @@ async def test_superseded_handshake_does_not_close_session(
 
     appliance.message_handler = closing_handler
 
-    await appliance.ws.close()
-
-    # stale handshakes need the (shortened) send timeout to expire
-    await asyncio.sleep(4)
+    with (
+        caplog.at_level(logging.DEBUG, logger="homeconnect_websocket"),
+        patch("homeconnect_websocket.session.asyncio.sleep", new=fast_sleep),
+    ):
+        await appliance.ws.close()
+        # stale handshakes need the (shortened) send timeout to expire
+        await real_sleep(1.5)
 
     assert closes == 2
     assert session.connection_state == ConnectionState.CONNECTED
@@ -950,5 +964,42 @@ async def test_superseded_handshake_does_not_close_session(
     assert ConnectionState.CLOSING not in [
         c.args[0] for c in connection_callback.await_args_list
     ]
+    assert [w for w in waits if w >= 1] == [1.0, TIMEOUT_INCREASE_FACTOR]
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert [r for r in caplog.records if r.levelno == logging.WARNING]
 
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_handshake_failure_without_newer_attempt_is_logged_as_error(
+    appliance_server: Callable[..., Awaitable[ApplianceServer]],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A handshake that fails on its own keeps the error with traceback."""
+    monkeypatch.setattr(HCSession.send_sync, "__defaults__", (0.3,))
+    appliance = await appliance_server(DEVICE_MESSAGE_SET_1)
+
+    async def silent_handler(_msg: Message) -> None:
+        return None
+
+    appliance.message_handler = silent_handler
+
+    session = HCSession(
+        appliance.host,
+        app_name=TEST_APP_NAME,
+        app_id=TEST_APP_ID,
+        psk64=None,
+        message_handler=AsyncMock(),
+    )
+    with (
+        caplog.at_level(logging.DEBUG, logger="homeconnect_websocket"),
+        pytest.raises(HCHandshakeError),
+    ):
+        await session.connect()
+
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(errors) == 1
+    assert errors[0].exc_info is not None
     await session.close()
