@@ -95,10 +95,14 @@ class TaskManager:
         try:
             await self.block_till_done(wait_background_tasks=True)
         except TimeoutError:
-            while tasks := [
+            tasks = [
                 task
                 for task in (self._tasks | self._background_tasks)
                 if task is not current_task
-            ]:
-                for task in tasks:
-                    task.cancel()
+            ]
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                # Give the cancelled tasks the chance to end. Without an await the
+                # event loop never runs them and stays blocked.
+                await asyncio.wait(tasks, timeout=BLOCK_TIMEOUT)
