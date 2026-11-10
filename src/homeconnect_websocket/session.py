@@ -36,6 +36,14 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
 
+def _backoff_delay(retry_count: int) -> float:
+    """Return the wait before the next attempt, capped at MAX_CONNECT_TIMEOUT."""
+    try:
+        return min(TIMEOUT_INCREASE_FACTOR**retry_count, MAX_CONNECT_TIMEOUT)
+    except OverflowError:
+        return MAX_CONNECT_TIMEOUT
+
+
 class ConnectionState(StrEnum):
     """Session connection state."""
 
@@ -576,9 +584,7 @@ class HCSessionReconnect(HCSession):
 
             except ConnectionFailedError, aiohttp.ClientError, TimeoutError:
                 self._logger.debug("Reconnect failed")
-                timeout = min(
-                    TIMEOUT_INCREASE_FACTOR**self._retry_count, MAX_CONNECT_TIMEOUT
-                )
+                timeout = _backoff_delay(self._retry_count)
                 self._retry_count += 1
                 await asyncio.sleep(timeout)
                 continue
@@ -620,10 +626,7 @@ class HCSessionReconnect(HCSession):
                     delay = 0.0
                     if self.connection_state == ConnectionState.HANDSHAKE:
                         # Closed during the handshake: wait before the next attempt
-                        delay = min(
-                            TIMEOUT_INCREASE_FACTOR**self._retry_count,
-                            MAX_CONNECT_TIMEOUT,
-                        )
+                        delay = _backoff_delay(self._retry_count)
                         self._retry_count += 1
                     self._set_connection_state(ConnectionState.RECONNECTING)
                     self._reconnect_task = self._task_manager.create_background_task(

@@ -1003,3 +1003,26 @@ async def test_handshake_failure_without_newer_attempt_is_logged_as_error(
     assert len(errors) == 1
     assert errors[0].exc_info is not None
     await session.close()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_loop_survives_huge_retry_count() -> None:
+    """A very high retry count must not break the backoff calculation."""
+    session = HCSessionReconnect(
+        "127.0.0.1",
+        app_name=TEST_APP_NAME,
+        app_id=TEST_APP_ID,
+        psk64=None,
+        handshake=False,
+    )
+    session._retry_count = 4000
+    session._socket.connect = AsyncMock(side_effect=[ConnectionFailedError, None])
+    session._wrap_recv_loop = AsyncMock()
+
+    with patch(
+        "homeconnect_websocket.session.asyncio.sleep", new=AsyncMock()
+    ) as sleep_mock:
+        await session._reconnect_loop()
+
+    sleep_mock.assert_awaited_once_with(MAX_CONNECT_TIMEOUT)
+    assert session.connection_state == ConnectionState.CONNECTED
