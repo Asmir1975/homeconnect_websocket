@@ -571,7 +571,11 @@ class HCSessionReconnect(HCSession):
                 continue
             except HCHandshakeError:
                 self._logger.debug("Reconnect failed")
-                self._set_connection_state(ConnectionState.CLOSING)
+                # A newer reconnect loop takes over when the connection closes
+                # during the handshake. A superseded handshake that times out
+                # later must not mark the newer, working connection as closing.
+                if self._reconnect_task in (None, asyncio.current_task()):
+                    self._set_connection_state(ConnectionState.CLOSING)
                 break
             except asyncio.CancelledError:
                 self._logger.debug("Reconnect cancelled")

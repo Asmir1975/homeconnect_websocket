@@ -898,3 +898,57 @@ async def test_connect_after_aborted_retry_starts_backoff_fresh() -> None:
         await session._reconnect_loop()
 
     sleep_mock.assert_has_awaits([call(1.0), call(1.2)])
+
+
+@pytest.mark.asyncio
+async def test_superseded_handshake_does_not_close_session(
+    appliance_server: Callable[..., Awaitable[ApplianceServer]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A superseded handshake must not mark a working reconnect as closing."""
+    # The appliance closes the first two reconnect connections right after the
+    # service request (code 1008). Every close starts a new reconnect loop while
+    # the previous loop still waits in its handshake. After the third connection
+    # succeeded, the two stale handshakes time out and must leave the state alone.
+    monkeypatch.setattr(HCSessionReconnect.send_sync, "__defaults__", (0.5,))
+    appliance = await appliance_server(DEVICE_MESSAGE_SET_1)
+    connection_callback = AsyncMock()
+
+    session = HCSessionReconnect(
+        appliance.host,
+        app_name=TEST_APP_NAME,
+        app_id=TEST_APP_ID,
+        psk64=None,
+        handshake=True,
+        message_handler=AsyncMock(),
+        connection_state_callback=connection_callback,
+    )
+    await session.connect()
+    assert session.connected
+
+    original_handler = appliance.message_handler
+    closes = 0
+
+    async def closing_handler(msg: Message) -> None:
+        nonlocal closes
+        if msg.resource == "/ci/services" and closes < 2:
+            closes += 1
+            await appliance.ws.close(code=1008)
+            return
+        await original_handler(msg)
+
+    appliance.message_handler = closing_handler
+
+    await appliance.ws.close()
+
+    # stale handshakes need the (shortened) send timeout to expire
+    await asyncio.sleep(4)
+
+    assert closes == 2
+    assert session.connection_state == ConnectionState.CONNECTED
+    assert session.connected
+    assert ConnectionState.CLOSING not in [
+        c.args[0] for c in connection_callback.await_args_list
+    ]
+
+    await session.close()
