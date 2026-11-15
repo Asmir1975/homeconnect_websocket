@@ -19,7 +19,11 @@ from homeconnect_websocket import (
     HCSession,
     HCSessionReconnect,
 )
-from homeconnect_websocket.const import MAX_CONNECT_TIMEOUT, TIMEOUT_INCREASE_FACTOR
+from homeconnect_websocket.const import (
+    DEFAULT_HANDSHAKE_TIMEOUT,
+    MAX_CONNECT_TIMEOUT,
+    TIMEOUT_INCREASE_FACTOR,
+)
 from homeconnect_websocket.message import Action, Message
 from homeconnect_websocket.testutils import TEST_APP_ID, TEST_APP_NAME
 
@@ -1026,3 +1030,22 @@ async def test_reconnect_loop_survives_huge_retry_count() -> None:
 
     sleep_mock.assert_awaited_once_with(MAX_CONNECT_TIMEOUT)
     assert session.connection_state == ConnectionState.CONNECTED
+
+
+@pytest.mark.asyncio
+async def test_pre_handshake_has_a_timeout() -> None:
+    """An appliance that never sends the init message must not block forever."""
+    session = HCSession(
+        "127.0.0.1",
+        app_name=TEST_APP_NAME,
+        app_id=TEST_APP_ID,
+        psk64=urlsafe_b64encode(get_random_bytes(32)).decode(),
+        iv64=urlsafe_b64encode(get_random_bytes(16)).decode(),
+        handshake=True,
+    )
+    session._socket.receive = AsyncMock(side_effect=TimeoutError)
+
+    with pytest.raises(TimeoutError):
+        await session._pre_handshake()
+
+    session._socket.receive.assert_awaited_once_with(DEFAULT_HANDSHAKE_TIMEOUT)

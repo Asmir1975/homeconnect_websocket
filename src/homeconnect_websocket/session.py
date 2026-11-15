@@ -15,6 +15,7 @@ from Crypto.Random import get_random_bytes
 from homeconnect_websocket.task_manager import TaskManager
 
 from .const import (
+    DEFAULT_HANDSHAKE_TIMEOUT,
     DEFAULT_SEND_TIMEOUT,
     ERROR_CODES,
     MAX_CONNECT_TIMEOUT,
@@ -395,7 +396,7 @@ class HCSession(HCSessionBase):
 
     async def _pre_handshake(self) -> Message:
         try:
-            message = await self._socket.receive()
+            message = await self._socket.receive(DEFAULT_HANDSHAKE_TIMEOUT)
             message_obj = load_message(message)
 
             if message_obj.resource == "/ei/initialValues":
