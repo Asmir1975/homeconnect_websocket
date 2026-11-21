@@ -162,7 +162,7 @@ class HCSessionBase:
         try:
             await self._recv_loop()
         except (aiohttp.ClientConnectionError, aiohttp.ServerTimeoutError) as exc:
-            self._logger.debug(exc)
+            self._logger.debug("%s (%s)", exc, self._host)
             raise ConnectionFailedError from exc
         except asyncio.CancelledError:
             self._logger.debug("Receive loop cancelled")
@@ -172,8 +172,9 @@ class HCSessionBase:
         finally:
             if self._socket.closed:
                 self._logger.debug(
-                    "Socket closed with code %s",
+                    "Socket closed with code %s (%s)",
                     self._socket._websocket.close_code,  # noqa: SLF001
+                    self._host,
                     exc_info=self._socket._websocket.exception(),  # noqa: SLF001
                 )
                 self._set_connection_state(ConnectionState.ABNORMAL_CLOSURE)
@@ -410,8 +411,9 @@ class HCSession(HCSessionBase):
 
             if message_obj.resource == "/ei/initialValues":
                 self._logger.info(
-                    "Got init message after %.2f s, beginning handshake",
+                    "Got init message after %.2f s from %s, beginning handshake",
                     time.monotonic() - started,
+                    self._host,
                 )
                 self._sid = message_obj.sid
                 self._last_msg_id = message_obj.data[0]["edMsgID"]
@@ -596,7 +598,7 @@ class HCSessionReconnect(HCSession):
                 break
 
             except (ConnectionFailedError, aiohttp.ClientError, TimeoutError) as exc:
-                self._logger.debug("Reconnect failed: %r", exc)
+                self._logger.debug("Reconnect failed: %r (%s)", exc, self._host)
                 # A failed attempt, for example a first message that is not the init
                 # message, can leave the websocket open. Close it before the next one.
                 with contextlib.suppress(Exception):
@@ -607,7 +609,7 @@ class HCSessionReconnect(HCSession):
                 await asyncio.sleep(_jittered(timeout))
                 continue
             except HCHandshakeError as exc:
-                self._logger.debug("Reconnect failed: %r", exc)
+                self._logger.debug("Reconnect failed: %r (%s)", exc, self._host)
                 # A newer reconnect loop takes over when the connection closes
                 # during the handshake. A superseded handshake that times out
                 # later must not mark the newer, working connection as closing.
@@ -626,7 +628,7 @@ class HCSessionReconnect(HCSession):
         try:
             await self._recv_loop()
         except (aiohttp.ClientConnectionError, aiohttp.ServerTimeoutError) as exc:
-            self._logger.debug(exc)
+            self._logger.debug("%s (%s)", exc, self._host)
         except asyncio.CancelledError:
             self._logger.debug("Receive loop cancelled")
             self._reconnect = False  # Disable reconnect on cancel
@@ -636,8 +638,9 @@ class HCSessionReconnect(HCSession):
         finally:
             if self._socket.closed:
                 self._logger.debug(
-                    "Socket closed with code %s",
+                    "Socket closed with code %s (%s)",
                     self._socket._websocket.close_code,  # noqa: SLF001
+                    self._host,
                     exc_info=self._socket._websocket.exception(),  # noqa: SLF001
                 )
                 if self._reconnect:

@@ -1114,3 +1114,4 @@ async def test_pre_handshake_logs_how_long_the_init_message_took(
         await session._pre_handshake()
 
     assert "Got init message after " in caplog.text
+    assert " from 127.0.0.1" in caplog.text
