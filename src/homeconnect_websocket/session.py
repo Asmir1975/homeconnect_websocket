@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import logging
 import random
+import time
 from abc import abstractmethod
 from base64 import urlsafe_b64encode
 from enum import StrEnum, auto
@@ -403,11 +404,15 @@ class HCSession(HCSessionBase):
 
     async def _pre_handshake(self) -> Message:
         try:
+            started = time.monotonic()
             message = await self._socket.receive(DEFAULT_HANDSHAKE_TIMEOUT)
             message_obj = load_message(message)
 
             if message_obj.resource == "/ei/initialValues":
-                self._logger.info("Got init message, beginning handshake")
+                self._logger.info(
+                    "Got init message after %.2f s, beginning handshake",
+                    time.monotonic() - started,
+                )
                 self._sid = message_obj.sid
                 self._last_msg_id = message_obj.data[0]["edMsgID"]
                 return message_obj

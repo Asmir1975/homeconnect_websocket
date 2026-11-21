@@ -1088,3 +1088,29 @@ async def test_reconnect_loop_closes_socket_after_failed_attempt() -> None:
         await session._reconnect_loop()
 
     session._socket.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_pre_handshake_logs_how_long_the_init_message_took(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The log shows the wait for the init message, it can take seconds."""
+    session = HCSession(
+        "127.0.0.1",
+        app_name=TEST_APP_NAME,
+        app_id=TEST_APP_ID,
+        psk64=urlsafe_b64encode(get_random_bytes(32)).decode(),
+        iv64=urlsafe_b64encode(get_random_bytes(16)).decode(),
+        handshake=True,
+    )
+    session._socket.receive = AsyncMock(
+        return_value=(
+            '{"sID": 1, "msgID": 2, "resource": "/ei/initialValues", "version": 2,'
+            ' "action": "POST", "data": [{"edMsgID": 3}]}'
+        )
+    )
+
+    with caplog.at_level(logging.INFO):
+        await session._pre_handshake()
+
+    assert "Got init message after " in caplog.text

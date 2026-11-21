@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from typing import Final
 
-DEFAULT_HANDSHAKE_TIMEOUT: Final[int] = 5
-"""Seconds to wait for the init message after connecting."""
+DEFAULT_HANDSHAKE_TIMEOUT: Final[int] = 60
+"""Seconds to wait for the init message after connecting.
+
+An EX851LYV5E needed up to 14 s after a lost pong, so a short value would abort
+reconnects that work.
+"""
 DEFAULT_SEND_TIMEOUT: Final[int] = 20
 MAX_CONNECT_TIMEOUT: Final[int] = 60
 TIMEOUT_INCREASE_FACTOR: Final[float] = 1.2
