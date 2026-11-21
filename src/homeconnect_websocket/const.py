@@ -6,6 +6,9 @@ DEFAULT_HANDSHAKE_TIMEOUT: Final[int] = 60
 DEFAULT_SEND_TIMEOUT: Final[int] = 20
 MAX_CONNECT_TIMEOUT: Final[int] = 60
 TIMEOUT_INCREASE_FACTOR: Final[float] = 1.2
+RECONNECT_JITTER: Final[float] = 2.0
+"""Maximum random delay in seconds added to every reconnect wait, so that several
+clients of one appliance do not reconnect in the same moment."""
 
 # CID to types mapping for Description Parser
 DESCRIPTION_TYPES: Final = {

@@ -22,9 +22,11 @@ from homeconnect_websocket import (
 from homeconnect_websocket.const import (
     DEFAULT_HANDSHAKE_TIMEOUT,
     MAX_CONNECT_TIMEOUT,
+    RECONNECT_JITTER,
     TIMEOUT_INCREASE_FACTOR,
 )
 from homeconnect_websocket.message import Action, Message
+from homeconnect_websocket.session import _jittered as real_jittered
 from homeconnect_websocket.testutils import TEST_APP_ID, TEST_APP_NAME
 
 from const import (
@@ -37,11 +39,20 @@ from const import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Iterator
 
     from tests.utils import ApplianceServerAes
 
     from utils import ApplianceServer
+
+
+@pytest.fixture(autouse=True)
+def _no_jitter() -> Iterator[None]:
+    """Keep the reconnect waits exact, the jitter has its own tests."""
+    with patch(
+        "homeconnect_websocket.session._jittered", side_effect=lambda delay: delay
+    ):
+        yield
 
 
 @pytest.mark.asyncio
@@ -1049,3 +1060,31 @@ async def test_pre_handshake_has_a_timeout() -> None:
         await session._pre_handshake()
 
     session._socket.receive.assert_awaited_once_with(DEFAULT_HANDSHAKE_TIMEOUT)
+
+
+def test_jittered_adds_a_bounded_random_share() -> None:
+    """The jitter only ever adds time, never more than RECONNECT_JITTER."""
+    for delay in (0.0, 1.0, MAX_CONNECT_TIMEOUT):
+        samples = [real_jittered(delay) - delay for _ in range(200)]
+        assert all(0.0 <= sample <= RECONNECT_JITTER for sample in samples)
+        assert len(set(samples)) > 1
+
+
+@pytest.mark.asyncio
+async def test_reconnect_loop_closes_socket_after_failed_attempt() -> None:
+    """A failed attempt, for example a bad first message, leaves no open socket."""
+    session = HCSessionReconnect(
+        "127.0.0.1",
+        app_name=TEST_APP_NAME,
+        app_id=TEST_APP_ID,
+        psk64=None,
+        handshake=False,
+    )
+    session._socket.connect = AsyncMock(side_effect=[ConnectionFailedError, None])
+    session._socket.close = AsyncMock()
+    session._wrap_recv_loop = AsyncMock()
+
+    with patch("homeconnect_websocket.session.asyncio.sleep", new=AsyncMock()):
+        await session._reconnect_loop()
+
+    session._socket.close.assert_awaited_once()

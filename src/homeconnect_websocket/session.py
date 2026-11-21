@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import random
 from abc import abstractmethod
 from base64 import urlsafe_b64encode
 from enum import StrEnum, auto
@@ -19,6 +20,7 @@ from .const import (
     DEFAULT_SEND_TIMEOUT,
     ERROR_CODES,
     MAX_CONNECT_TIMEOUT,
+    RECONNECT_JITTER,
     TIMEOUT_INCREASE_FACTOR,
 )
 from .errors import (
@@ -43,6 +45,11 @@ def _backoff_delay(retry_count: int) -> float:
         return min(TIMEOUT_INCREASE_FACTOR**retry_count, MAX_CONNECT_TIMEOUT)
     except OverflowError:
         return MAX_CONNECT_TIMEOUT
+
+
+def _jittered(delay: float) -> float:
+    """Return delay plus a random share, so parallel clients do not retry together."""
+    return delay + random.uniform(0.0, RECONNECT_JITTER)  # noqa: S311
 
 
 class ConnectionState(StrEnum):
@@ -583,14 +590,19 @@ class HCSessionReconnect(HCSession):
                 self._retry_count = 0
                 break
 
-            except ConnectionFailedError, aiohttp.ClientError, TimeoutError:
-                self._logger.debug("Reconnect failed")
+            except (ConnectionFailedError, aiohttp.ClientError, TimeoutError) as exc:
+                self._logger.debug("Reconnect failed: %r", exc)
+                # A failed attempt, for example a first message that is not the init
+                # message, can leave the websocket open. Close it before the next one.
+                with contextlib.suppress(Exception):
+                    async with asyncio.timeout(2.0):
+                        await self._socket.close()
                 timeout = _backoff_delay(self._retry_count)
                 self._retry_count += 1
-                await asyncio.sleep(timeout)
+                await asyncio.sleep(_jittered(timeout))
                 continue
-            except HCHandshakeError:
-                self._logger.debug("Reconnect failed")
+            except HCHandshakeError as exc:
+                self._logger.debug("Reconnect failed: %r", exc)
                 # A newer reconnect loop takes over when the connection closes
                 # during the handshake. A superseded handshake that times out
                 # later must not mark the newer, working connection as closing.
@@ -631,7 +643,7 @@ class HCSessionReconnect(HCSession):
                         self._retry_count += 1
                     self._set_connection_state(ConnectionState.RECONNECTING)
                     self._reconnect_task = self._task_manager.create_background_task(
-                        self._reconnect_after(delay)
+                        self._reconnect_after(_jittered(delay))
                     )
                 else:
                     self._set_connection_state(ConnectionState.ABNORMAL_CLOSURE)
