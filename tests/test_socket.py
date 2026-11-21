@@ -9,6 +9,7 @@ import pytest
 from aiohttp import ServerTimeoutError, WSMessage, WSMsgType
 from Crypto.Random import get_random_bytes
 from homeconnect_websocket import AuthenticationError
+from homeconnect_websocket.const import WEBSOCKET_HEARTBEAT
 from homeconnect_websocket.hc_socket import AesSocket, TlsSocket
 from homeconnect_websocket.hc_socket import _make_url as make_url
 from homeconnect_websocket.testutils import TEST_IV64, TEST_PSK64
@@ -245,3 +246,14 @@ def test_make_url() -> None:
         str(make_url("FE80::9627:70FF:FEDB:117D%eth0", ssl=True))
         == "wss://[fe80::9627:70ff:fedb:117d%eth0]/homeconnect"
     )
+
+
+@pytest.mark.asyncio
+async def test_ws_connect_uses_heartbeat_constant() -> None:
+    """The ping interval comes from WEBSOCKET_HEARTBEAT."""
+    session = AsyncMock()
+    socket = TlsSocket("127.0.0.1", psk64=TEST_PSK64, session=session)
+
+    await socket._ws_connect()
+
+    assert session.ws_connect.await_args.kwargs["heartbeat"] == WEBSOCKET_HEARTBEAT

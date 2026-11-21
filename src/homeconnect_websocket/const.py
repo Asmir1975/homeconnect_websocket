@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from typing import Final
 
-DEFAULT_HANDSHAKE_TIMEOUT: Final[int] = 60
+DEFAULT_HANDSHAKE_TIMEOUT: Final[int] = 5
+"""Seconds to wait for the init message after connecting."""
 DEFAULT_SEND_TIMEOUT: Final[int] = 20
 MAX_CONNECT_TIMEOUT: Final[int] = 60
 TIMEOUT_INCREASE_FACTOR: Final[float] = 1.2
+WEBSOCKET_HEARTBEAT: Final[int] = 40
+"""Seconds without traffic before a WebSocket ping is sent. aiohttp waits half of this
+for the pong, so 20 s."""
 RECONNECT_JITTER: Final[float] = 2.0
 """Maximum random delay in seconds added to every reconnect wait, so that several
 clients of one appliance do not reconnect in the same moment."""

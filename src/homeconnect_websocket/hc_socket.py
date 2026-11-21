@@ -12,6 +12,7 @@ import yarl
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 
+from .const import WEBSOCKET_HEARTBEAT
 from .errors import AuthenticationError
 
 
@@ -68,7 +69,9 @@ class HCSocket:
         if self._owned_session and self._session is None:
             self._session = aiohttp.ClientSession()
 
-        return await self._session.ws_connect(self._url, *args, heartbeat=20, **kwargs)
+        return await self._session.ws_connect(
+            self._url, *args, heartbeat=WEBSOCKET_HEARTBEAT, **kwargs
+        )
 
     @abstractmethod
     async def send(self, message: str) -> None:
