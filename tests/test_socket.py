@@ -257,3 +257,12 @@ async def test_ws_connect_uses_heartbeat_constant() -> None:
     await socket._ws_connect()
 
     assert session.ws_connect.await_args.kwargs["heartbeat"] == WEBSOCKET_HEARTBEAT
+
+
+@pytest.mark.asyncio
+async def test_close_twice_does_not_raise() -> None:
+    """A second close() without a new session is a no-op."""
+    socket = TlsSocket("127.0.0.1", psk64=TEST_PSK64)
+
+    await socket.close()
+    await socket.close()

@@ -92,7 +92,7 @@ class HCSocket:
         if self._websocket:
             await self._websocket.close()
 
-        if self._owned_session:
+        if self._owned_session and self._session is not None:
             await self._session.close()
             self._session = None
 
