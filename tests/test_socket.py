@@ -245,3 +245,12 @@ def test_make_url() -> None:
         str(make_url("FE80::9627:70FF:FEDB:117D%eth0", ssl=True))
         == "wss://[fe80::9627:70ff:fedb:117d%eth0]/homeconnect"
     )
+
+
+@pytest.mark.asyncio
+async def test_close_twice_does_not_raise() -> None:
+    """A second close() without a new session is a no-op."""
+    socket = TlsSocket("127.0.0.1", psk64=TEST_PSK64)
+
+    await socket.close()
+    await socket.close()
