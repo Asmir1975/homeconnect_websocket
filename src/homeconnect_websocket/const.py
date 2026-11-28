@@ -6,6 +6,9 @@ DEFAULT_HANDSHAKE_TIMEOUT: Final[int] = 60
 DEFAULT_SEND_TIMEOUT: Final[int] = 20
 MAX_CONNECT_TIMEOUT: Final[int] = 60
 TIMEOUT_INCREASE_FACTOR: Final[float] = 1.2
+WEBSOCKET_HEARTBEAT: Final[int] = 40
+"""Seconds without traffic before a WebSocket ping is sent. aiohttp waits half of this
+for the pong, so 20 s."""
 
 # CID to types mapping for Description Parser
 DESCRIPTION_TYPES: Final = {
